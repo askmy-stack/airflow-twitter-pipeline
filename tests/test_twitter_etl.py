@@ -2,6 +2,7 @@ import json
 
 from twitter_etl import (
     _normalize_tweet,
+    _normalise_tweets,
     enrich_tweet,
     load_xquik_rows,
     run_twitter_etl,
@@ -32,6 +33,60 @@ def test_load_xquik_jsonl_rows(tmp_path):
 
     assert len(rows) == 2
     assert rows[0]["fullText"] == "OpenAI released an AI agent infrastructure update"
+
+
+def test_xquik_rows_normalise_to_legacy_csv_projection(tmp_path):
+    export_path = tmp_path / "xquik.jsonl"
+    export_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "id": "1",
+                        "fullText": "First Xquik row",
+                        "author": {"username": "alice"},
+                        "like_count": 4,
+                        "createdAt": "2026-07-06T12:00:00Z",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "id": "2",
+                        "text": "Second row",
+                        "username": "bob",
+                        "createdAt": "2026-07-06T12:01:00Z",
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rows = _normalise_tweets(load_xquik_rows(export_path))
+
+    assert rows == [
+        {
+            "user": "alice",
+            "text": "First Xquik row",
+            "favorite_count": 4,
+            "retweet_count": 0,
+            "created_at": "2026-07-06T12:00:00Z",
+        },
+        {
+            "user": "bob",
+            "text": "Second row",
+            "favorite_count": 0,
+            "retweet_count": 0,
+            "created_at": "2026-07-06T12:01:00Z",
+        },
+    ]
+
+
+def test_normalise_tweets_skips_empty_text():
+    rows = _normalise_tweets([{"text": ""}, {"text": "keep me"}])
+
+    assert len(rows) == 1
+    assert rows[0]["text"] == "keep me"
 
 
 def test_enriched_record_has_required_schema():
