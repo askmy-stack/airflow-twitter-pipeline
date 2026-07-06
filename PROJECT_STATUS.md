@@ -13,9 +13,11 @@ The main pipeline currently supports:
 - model-agnostic AI provider selection through environment variables
 - strict schema validation for AI enrichment output
 - JSONL and grouped JSON export artifacts
+- analytics-ready CSV export generated from enriched records
 - Airflow orchestration
-- Streamlit dashboard support
+- Streamlit dashboard support with JSONL-first loading
 - GitHub Actions CI
+- production-readiness audit in `docs/PRODUCTION_READINESS_AUDIT.md`
 
 ## Model-Agnostic AI Enrichment
 
@@ -68,8 +70,7 @@ python3 -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
 ## Next Recommended Enhancements
 
 - Split `twitter_etl.py` into focused ingestion, enrichment, schema, and export modules.
-- Flatten key enrichment fields into CSV for dashboard analytics.
-- Update `dashboard.py` to prefer enriched JSON/JSONL over CSV.
 - Modernize the Airflow DAG to Airflow 2 style imports.
 - Add contributor issues for new connectors and provider adapters.
 - Add optional semantic search with embeddings and a local vector index.
+- Add retry/backoff and structured logging for live API ingestion.

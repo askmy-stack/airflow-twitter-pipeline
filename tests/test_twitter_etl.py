@@ -1,5 +1,6 @@
 import json
 
+import pandas as pd
 import pytest
 
 from twitter_etl import (
@@ -424,8 +425,21 @@ def test_run_pipeline_writes_csv_json_and_jsonl(tmp_path, monkeypatch):
     assert csv_path.exists()
     assert jsonl_path.exists()
     assert json_path.exists()
+    csv = pd.read_csv(csv_path)
     jsonl_records = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
     grouped = json.loads(json_path.read_text(encoding="utf-8"))
     assert len(jsonl_records) == 2
     assert grouped["metadata"]["record_count"] == 2
     assert all(record["tweet"]["is_sample"] for record in jsonl_records)
+    assert {
+        "sentiment",
+        "topics",
+        "summary",
+        "intent",
+        "signal_type",
+        "primary_domain",
+        "ai_provider",
+        "enrichment_mode",
+        "requires_human_review",
+    }.issubset(csv.columns)
+    assert csv["ai_provider"].tolist() == ["local", "local"]
