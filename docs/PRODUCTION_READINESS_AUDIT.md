@@ -19,10 +19,10 @@ The project is ready for recruiter review, demos, and early open source contribu
 | CI | Ready | Compile, tests, and fixture demo run in GitHub Actions |
 | Documentation | Ready | README, contributing, security, changelog, templates updated |
 | Dashboard | Demo-ready | Reads JSONL first and CSV fallback |
-| Airflow orchestration | Demo-ready | DAG calls the ETL entrypoint |
-| Live API resilience | Needs hardening | Add retry/backoff/rate-limit handling |
-| Long-term maintainability | Needs hardening | Split `twitter_etl.py` into focused modules |
-| Release process | Needs hardening | Add tags, release notes, and schema versioning policy |
+| Airflow orchestration | Ready | Airflow 2 TaskFlow DAG calls the ETL entrypoint |
+| Live API resilience | Improved | Twitter/X ingestion has retry/backoff and logging |
+| Long-term maintainability | Improved | Source and export responsibilities are split into package modules |
+| Release process | Ready | Tag-triggered release workflow validates `VERSION` |
 
 ## README Redesign Summary
 
@@ -59,14 +59,16 @@ High-impact improvements already completed:
 - updated `CLAUDE.md` so assistant guidance matches the current codebase
 - updated CI compile coverage
 - made CSV output dashboard-ready
+- added source/export package modules
+- added Twitter/X API retry/backoff coverage
+- modernized the DAG to Airflow 2 TaskFlow style
+- added tag-driven GitHub Release automation
 
 Recommended next implementation work:
 
-- split the ETL into `sources`, `schema`, `providers`, `enrichment`, and `exports` modules
-- convert the DAG to Airflow 2 TaskFlow API
-- add structured logging and retries around live Twitter/X API calls
+- continue splitting provider and schema internals into dedicated modules
 - add dashboard-level tests or snapshot checks
-- add release automation and semantic versioning
+- add semantic schema migration notes
 
 ## Documentation Improvements
 
@@ -81,8 +83,7 @@ Completed:
 
 Remaining:
 
-- add provider-specific examples for Groq, Together, Fireworks, Ollama, vLLM, and LM Studio
-- add deployment guide for Airflow on a VM or managed Airflow
+- expand provider docs with verified screenshots or endpoint-specific caveats
 - add schema versioning and migration notes once the schema stabilizes
 
 ## UI And Visual Presentation Recommendations
@@ -103,15 +104,13 @@ Recommended:
 
 ### High
 
-- Add retry/backoff and structured logging for Twitter/X API ingestion.
-- Split `twitter_etl.py` into focused modules before the codebase grows further.
 - Add release tags and publish the first `v0.1.0` once PR #4 is merged.
+- Continue splitting provider/schema internals before the codebase grows further.
 
 ### Medium
 
-- Add provider-specific docs for popular local/open source stacks.
 - Add dashboard tests and a dashboard screenshot/GIF.
-- Add Airflow 2 TaskFlow DAG with separate extract, enrich, validate, and export tasks.
+- Add an Airflow DAG variant with separate extract, enrich, validate, and export tasks.
 - Add a DuckDB analytics layer for larger output sets.
 
 ### Low

@@ -20,6 +20,13 @@ pip install -r requirements.txt
 pip install pytest
 ```
 
+Optional pre-commit setup:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
 ## Run The No-Credential Demo
 
 ```bash
@@ -35,8 +42,8 @@ python -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
 ## Validate Changes
 
 ```bash
-python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py
-PYTHONPATH=. pytest tests/ -q
+python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py social_signal_pipeline/*.py
+pytest -q
 ```
 
 ## Data Safety Requirements

@@ -1,32 +1,37 @@
-from datetime import timedelta
-from airflow import DAG
-from airflow.operators.python_operator import PythonOperator
-from airflow.utils.dates import days_ago
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from airflow.decorators import dag, task
+
 from twitter_etl import run_twitter_etl
 
-default_args = {
-    'owner': 'airflow',
-    'depends_on_past': False,
-    'start_date': datetime(2020, 11, 8),
-    'email': ['airflow@example.com'],
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=1)
+
+DEFAULT_ARGS = {
+    "owner": "airflow",
+    "depends_on_past": False,
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "retries": 1,
+    "retry_delay": timedelta(minutes=1),
 }
 
-dag = DAG(
-    'twitter_dag',
-    default_args=default_args,
-    description='Our first DAG with ETL process!',
-    schedule_interval=timedelta(days=1),
-)
 
-run_etl = PythonOperator(
-    task_id='complete_twitter_etl',
-    python_callable=run_twitter_etl,
-    dag=dag, 
+@dag(
+    dag_id="twitter_dag",
+    default_args=DEFAULT_ARGS,
+    description="Ingest, enrich, validate, and export Twitter/X signal intelligence.",
+    schedule=timedelta(days=1),
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    tags=["twitter", "ai-enrichment", "social-signals"],
 )
+def social_signal_pipeline_dag():
+    @task(task_id="run_twitter_etl")
+    def run_pipeline():
+        return run_twitter_etl()
 
-run_etl
+    run_pipeline()
+
+
+twitter_dag = social_signal_pipeline_dag()
