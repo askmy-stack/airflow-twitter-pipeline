@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments and secrets
+.env
+.venv/
+venv/
+env/
+
+# Airflow runtime
+airflow/
+airflow.cfg
+airflow.db
+logs/
+webserver_config.py
+
+# Pipeline outputs and local exports
+outputs/
+exports/
+refined_tweets.csv
+*.parquet
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
