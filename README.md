@@ -28,15 +28,3 @@ airflow db init
 airflow webserver &
 airflow scheduler &
 ```
-
-## What I learned
-
-Airflow's DAG-based scheduling adds retry logic and observability to an otherwise brittle API polling loop. Discrete task boundaries make it easy to pinpoint failures at a specific stage.
-
-## License
-
-MIT
-
----
-
-Built by [Abhinaysai Kamineni](https://github.com/askmy-stack)
