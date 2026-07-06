@@ -306,7 +306,3 @@ Do not commit `.env`, credentials, private exports, or generated output files. S
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
-## Contact
-
-Maintained by [askmy-stack](https://github.com/askmy-stack). Open an issue or pull request for questions, ideas, and improvements.
