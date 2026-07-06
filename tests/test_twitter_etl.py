@@ -1,13 +1,32 @@
 import json
 
+import pytest
+
 from twitter_etl import (
+    BaseEnrichmentProvider,
     _normalize_tweet,
     _normalise_tweets,
+    _provider_from_env,
     enrich_tweet,
     load_xquik_rows,
     run_twitter_etl,
     validate_enriched_record,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_ai_provider_env(monkeypatch):
+    for name in (
+        "AI_PROVIDER",
+        "AI_ENRICHMENT_MODE",
+        "AI_MODEL",
+        "AI_API_KEY",
+        "AI_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_load_xquik_jsonl_rows(tmp_path):
@@ -107,8 +126,199 @@ def test_enriched_record_has_required_schema():
     assert record["tweet"]["source_confidence"] == "verified"
     assert record["ai_enrichment"]["sentiment"] in {"positive", "neutral", "mixed"}
     assert record["domain_analysis"]["primary_domain"] in {"ai_ml", "cloud", "semiconductors"}
+    assert record["quality"]["ai_provider"] == "local"
+    assert record["quality"]["ai_model"] == "local-rule-enricher-v1"
+    assert record["quality"]["enrichment_mode"] == "local"
+    assert record["quality"]["fallback_used"] is False
     assert record["quality"]["validated"] is True
     assert record["quality"]["validation_errors"] == []
+
+
+def test_provider_selection_defaults_to_local(monkeypatch):
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    provider = _provider_from_env()
+
+    assert provider.provider_name == "local"
+    assert provider.model == "local-rule-enricher-v1"
+    assert provider.enrichment_mode == "local"
+
+
+def test_openai_provider_without_credentials_falls_back_to_local(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    row = _normalize_tweet(
+        {
+            "_source_connector": "twitter_api",
+            "id": "provider-1",
+            "text": "OpenAI released an AI infrastructure update.",
+            "username": "ai_lab",
+            "created_at": "2026-07-06T12:00:00Z",
+        }
+    )
+
+    record = enrich_tweet(row)
+
+    assert record["quality"]["ai_provider"] == "local"
+    assert record["quality"]["fallback_used"] is True
+    assert record["quality"]["validated"] is True
+
+
+def test_openai_compatible_mock_provider_can_return_valid_json(monkeypatch):
+    class MockProvider(BaseEnrichmentProvider):
+        provider_name = "openai_compatible"
+        default_model = "mock-model"
+
+        @property
+        def enrichment_mode(self):
+            return "api"
+
+        def enrich(self, row):
+            return {
+                "sentiment": "positive",
+                "topics": ["ai_ml", "infrastructure"],
+                "entities": [{"name": "OpenAI", "type": "company", "confidence": 0.9}],
+                "summary": "OpenAI released a new infrastructure update.",
+                "toxicity_risk": {"level": "none", "score": 0.0, "reason": "No toxicity indicators detected."},
+                "intent": "product_update",
+                "market_or_social_signal": {
+                    "signal_type": "adoption",
+                    "strength": "medium",
+                    "rationale": "The tweet references adoption or deployment.",
+                },
+            }
+
+    monkeypatch.setenv("AI_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AI_MODEL", "mock-model")
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setitem(__import__("twitter_etl").PROVIDER_REGISTRY, "openai_compatible", MockProvider)
+    row = _normalize_tweet(
+        {
+            "_source_connector": "twitter_api",
+            "id": "provider-2",
+            "text": "OpenAI deployment adoption improves AI infrastructure.",
+            "username": "ai_lab",
+            "created_at": "2026-07-06T12:00:00Z",
+        }
+    )
+
+    record = enrich_tweet(row)
+
+    assert record["ai_enrichment"]["summary"] == "OpenAI released a new infrastructure update."
+    assert record["quality"]["ai_provider"] == "openai_compatible"
+    assert record["quality"]["ai_model"] == "mock-model"
+    assert record["quality"]["enrichment_mode"] == "api"
+    assert record["quality"]["fallback_used"] is False
+    assert record["quality"]["validated"] is True
+
+
+def test_invalid_provider_json_falls_back_to_local(monkeypatch):
+    class InvalidProvider(BaseEnrichmentProvider):
+        provider_name = "openai_compatible"
+        default_model = "broken-model"
+
+        @property
+        def enrichment_mode(self):
+            return "api"
+
+        def enrich(self, row):
+            return {
+                "sentiment": "excited",
+                "topics": ["ai_ml"],
+                "entities": [],
+                "summary": "Invalid enum payload.",
+                "toxicity_risk": {"level": "none", "score": 0.0, "reason": "No toxicity indicators detected."},
+                "intent": "product_update",
+                "market_or_social_signal": {
+                    "signal_type": "none",
+                    "strength": "low",
+                    "rationale": "No grounded market or social signal detected.",
+                },
+            }
+
+    monkeypatch.setenv("AI_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setitem(__import__("twitter_etl").PROVIDER_REGISTRY, "openai_compatible", InvalidProvider)
+    row = _normalize_tweet(
+        {
+            "_source_connector": "twitter_api",
+            "id": "provider-3",
+            "text": "AI infrastructure update released.",
+            "username": "ai_lab",
+            "created_at": "2026-07-06T12:00:00Z",
+        }
+    )
+
+    record = enrich_tweet(row)
+
+    assert record["quality"]["ai_provider"] == "local"
+    assert record["quality"]["fallback_used"] is True
+    assert record["ai_enrichment"]["sentiment"] in {"positive", "neutral", "mixed", "negative"}
+    assert record["quality"]["validated"] is True
+
+
+def test_hybrid_mode_records_valid_model_enrichment(monkeypatch):
+    class HybridProvider(BaseEnrichmentProvider):
+        provider_name = "openai_compatible"
+        default_model = "hybrid-model"
+
+        @property
+        def enrichment_mode(self):
+            return "api"
+
+        def enrich(self, row):
+            return {
+                "sentiment": "mixed",
+                "topics": ["ai_ml", "finance"],
+                "entities": [{"name": "NVIDIA", "type": "company", "confidence": 0.92}],
+                "summary": "NVIDIA AI infrastructure demand is affecting market expectations.",
+                "toxicity_risk": {"level": "none", "score": 0.0, "reason": "No toxicity indicators detected."},
+                "intent": "market_commentary",
+                "market_or_social_signal": {
+                    "signal_type": "bullish",
+                    "strength": "medium",
+                    "rationale": "The tweet includes positive market language.",
+                },
+            }
+
+    monkeypatch.setenv("AI_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AI_ENRICHMENT_MODE", "hybrid")
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setitem(__import__("twitter_etl").PROVIDER_REGISTRY, "openai_compatible", HybridProvider)
+    row = _normalize_tweet(
+        {
+            "_source_connector": "twitter_api",
+            "id": "provider-4",
+            "text": "NVIDIA AI infrastructure demand looks bullish for market expectations.",
+            "username": "market_ai",
+            "created_at": "2026-07-06T12:00:00Z",
+        }
+    )
+
+    record = enrich_tweet(row)
+
+    assert record["ai_enrichment"]["sentiment"] == "mixed"
+    assert record["quality"]["ai_provider"] == "openai_compatible"
+    assert record["quality"]["enrichment_mode"] == "hybrid"
+    assert record["quality"]["fallback_used"] is False
+    assert record["quality"]["validated"] is True
+
+
+def test_ollama_provider_uses_local_llm_mode_without_api_key(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "ollama")
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.setenv("AI_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("AI_MODEL", "llama3.1")
+
+    provider = _provider_from_env()
+
+    assert provider.provider_name == "ollama"
+    assert provider.model == "llama3.1"
+    assert provider.enrichment_mode == "local_llm"
+    assert provider.is_configured() is True
 
 
 def test_missing_xquik_tweet_id_is_exported_not_verified():

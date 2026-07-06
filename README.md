@@ -1,6 +1,6 @@
-# airflow-twitter-pipeline
+# social-signal-pipeline
 
-[![CI](https://github.com/askmy-stack/airflow-twitter-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/askmy-stack/airflow-twitter-pipeline/actions/workflows/ci.yml)
+[![CI](https://github.com/askmy-stack/social-signal-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/askmy-stack/social-signal-pipeline/actions/workflows/ci.yml)
 
 > Twitter/X data ingestion pipeline orchestrated with Apache Airflow.
 
@@ -22,13 +22,13 @@ End-to-end ETL pipeline that collects tweets via fixture data, Xquik exports, or
 - **Languages:** Python
 - **Orchestration:** Apache Airflow
 - **APIs:** Twitter/X API v2
-- **AI:** Optional OpenAI enrichment with local deterministic fallback
+- **AI:** Model-agnostic enrichment with local rules, local LLMs, and OpenAI-compatible APIs
 
 ## Setup
 
 ```bash
-git clone https://github.com/askmy-stack/airflow-twitter-pipeline.git
-cd airflow-twitter-pipeline
+git clone https://github.com/askmy-stack/social-signal-pipeline.git
+cd social-signal-pipeline
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -43,6 +43,7 @@ airflow scheduler &
 
 ```bash
 export FIXTURE_TWEETS_PATH=examples/sample_tweets.jsonl
+export AI_PROVIDER=local
 export OUTPUT_CSV_PATH=outputs/refined_tweets.csv
 export OUTPUT_JSONL_PATH=outputs/enriched_tweets.jsonl
 export OUTPUT_JSON_PATH=outputs/enriched_tweets.json
@@ -85,9 +86,43 @@ Each enriched record includes:
 - `tweet`: source truth, author, text, timestamps, metrics, connector, confidence, and sample flag
 - `ai_enrichment`: sentiment, topics, entities, summary, toxicity risk, intent, and market/social signal
 - `domain_analysis`: primary domain, secondary domains, correlations, and relevance score
-- `quality`: schema version, model name, validation status, validation errors, and human-review flag
+- `quality`: schema version, provider, model, enrichment mode, fallback status, validation status, validation errors, and human-review flag
 
-If `OPENAI_API_KEY` is present, the enrichment step attempts structured OpenAI enrichment. If it is absent or the model output fails validation, the pipeline uses a deterministic local classifier so tests and demos still run.
+## Model-agnostic AI enrichment
+
+The default enrichment path uses deterministic local rules, so tests and demos run without paid APIs:
+
+```bash
+export AI_PROVIDER=local
+export AI_ENRICHMENT_MODE=local
+export AI_MODEL=local-rule-enricher-v1
+```
+
+Use a local open source model through an OpenAI-compatible endpoint such as Ollama, vLLM, or LM Studio:
+
+```bash
+export AI_PROVIDER=ollama
+export AI_ENRICHMENT_MODE=local_llm
+export AI_MODEL=llama3.1
+export AI_BASE_URL=http://localhost:11434/v1
+python -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
+```
+
+Use hosted or commercial providers by setting `AI_PROVIDER`, `AI_MODEL`, and `AI_API_KEY`. Providers with OpenAI-compatible APIs can also set `AI_BASE_URL`.
+
+```bash
+export AI_PROVIDER=openai_compatible
+export AI_ENRICHMENT_MODE=api
+export AI_MODEL=provider/model-name
+export AI_API_KEY=...
+export AI_BASE_URL=https://api.provider.example/v1
+```
+
+Supported provider names are `local`, `openai`, `anthropic`, `ollama`, `huggingface`, `vllm`, `lmstudio`, `together`, `groq`, `fireworks`, and `openai_compatible`.
+
+Supported enrichment modes are `local`, `api`, `local_llm`, and `hybrid`. Use `hybrid` when you want local rules as the baseline while accepting a validated model result from the configured provider.
+
+Every model response is validated with the enrichment schema before it is trusted. Malformed JSON, missing fields, invalid enum values, unsupported domains, and unconfigured providers fall back to local rules. The model never controls source truth fields such as tweet IDs, URLs, authors, metrics, or connector confidence.
 
 ## Validate changes
 

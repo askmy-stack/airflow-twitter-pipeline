@@ -1,13 +1,31 @@
 import json
 import os
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 SCHEMA_VERSION = "1.0"
 LOCAL_ENRICHER_MODEL = "local-rule-enricher-v1"
+LOCAL_PROVIDER = "local"
+ENRICHMENT_MODES = {"local", "api", "local_llm", "hybrid"}
+SUPPORTED_AI_PROVIDERS = {
+    "local",
+    "openai",
+    "anthropic",
+    "ollama",
+    "huggingface",
+    "vllm",
+    "lmstudio",
+    "together",
+    "groq",
+    "fireworks",
+    "openai_compatible",
+}
+LOCAL_LLM_PROVIDERS = {"ollama", "vllm", "lmstudio"}
 
 ENTITY_TYPES = {
     "person",
@@ -206,6 +224,238 @@ NEGATIVE_WORDS = {
 TOXIC_WORDS = {"hate", "kill", "racist", "threat", "violent"}
 
 
+class ToxicityRiskModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    level: str
+    score: float = Field(ge=0.0, le=1.0)
+    reason: str
+
+    @field_validator("level")
+    @classmethod
+    def validate_level(cls, value):
+        if value not in TOXICITY_LEVELS:
+            raise ValueError("unsupported toxicity level")
+        return value
+
+
+class EntityModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("type")
+    @classmethod
+    def validate_entity_type(cls, value):
+        if value not in ENTITY_TYPES:
+            raise ValueError("unsupported entity type")
+        return value
+
+
+class MarketOrSocialSignalModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    signal_type: str
+    strength: str
+    rationale: str
+
+    @field_validator("signal_type")
+    @classmethod
+    def validate_signal_type(cls, value):
+        if value not in SIGNAL_TYPES:
+            raise ValueError("unsupported signal type")
+        return value
+
+    @field_validator("strength")
+    @classmethod
+    def validate_strength(cls, value):
+        if value not in SIGNAL_STRENGTHS:
+            raise ValueError("unsupported signal strength")
+        return value
+
+
+class AiEnrichmentModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sentiment: str
+    topics: list[str]
+    entities: list[EntityModel]
+    summary: str
+    toxicity_risk: ToxicityRiskModel
+    intent: str
+    market_or_social_signal: MarketOrSocialSignalModel
+
+    @field_validator("sentiment")
+    @classmethod
+    def validate_sentiment(cls, value):
+        if value not in SENTIMENTS:
+            raise ValueError("unsupported sentiment")
+        return value
+
+    @field_validator("intent")
+    @classmethod
+    def validate_intent(cls, value):
+        if value not in INTENTS:
+            raise ValueError("unsupported intent")
+        return value
+
+
+class BaseEnrichmentProvider(ABC):
+    provider_name = LOCAL_PROVIDER
+    default_model = LOCAL_ENRICHER_MODEL
+    requires_api_key = False
+
+    def __init__(self, model=None, api_key=None, base_url=None):
+        self.model = model or self.default_model
+        self.api_key = api_key
+        self.base_url = base_url
+
+    @property
+    def enrichment_mode(self):
+        return "local"
+
+    def is_configured(self):
+        return bool(self.api_key) if self.requires_api_key else True
+
+    @abstractmethod
+    def enrich(self, row):
+        raise NotImplementedError
+
+
+class LocalRuleProvider(BaseEnrichmentProvider):
+    provider_name = LOCAL_PROVIDER
+    default_model = LOCAL_ENRICHER_MODEL
+
+    def enrich(self, row):
+        return _local_ai_enrichment(row["text"])
+
+
+class OpenAICompatibleProvider(BaseEnrichmentProvider):
+    provider_name = "openai_compatible"
+    default_model = "gpt-4.1-mini"
+    requires_api_key = True
+
+    @property
+    def enrichment_mode(self):
+        return "local_llm" if self.provider_name in LOCAL_LLM_PROVIDERS else "api"
+
+    def is_configured(self):
+        if self.provider_name in LOCAL_LLM_PROVIDERS:
+            return bool(self.base_url)
+        return bool(self.api_key)
+
+    def enrich(self, row):
+        from openai import OpenAI
+
+        client_kwargs = {}
+        if self.api_key:
+            client_kwargs["api_key"] = self.api_key
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        client = OpenAI(**client_kwargs)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only a JSON object with these keys: sentiment, topics, "
+                        "entities, summary, toxicity_risk, intent, market_or_social_signal. "
+                        "Do not invent tweet IDs, source URLs, authors, metrics, or market "
+                        "signals. Use signal_type 'none' when the tweet does not support one."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(_tweet_payload(row), ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return json.loads(response.choices[0].message.content)
+
+
+class AnthropicProvider(BaseEnrichmentProvider):
+    provider_name = "anthropic"
+    default_model = "claude-3-5-haiku-latest"
+    requires_api_key = True
+
+    @property
+    def enrichment_mode(self):
+        return "api"
+
+    def enrich(self, row):
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=self.api_key)
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=1200,
+            temperature=0,
+            system=(
+                "Return only a JSON object with these keys: sentiment, topics, entities, "
+                "summary, toxicity_risk, intent, market_or_social_signal. Do not invent "
+                "source metadata or unsupported market signals."
+            ),
+            messages=[{"role": "user", "content": json.dumps(_tweet_payload(row), ensure_ascii=False)}],
+        )
+        text = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+        return json.loads(text)
+
+
+class HuggingFaceProvider(OpenAICompatibleProvider):
+    provider_name = "huggingface"
+    default_model = "meta-llama/Llama-3.1-8B-Instruct"
+
+
+class OllamaProvider(OpenAICompatibleProvider):
+    provider_name = "ollama"
+    default_model = "llama3.1"
+    requires_api_key = False
+
+
+class VllmProvider(OpenAICompatibleProvider):
+    provider_name = "vllm"
+    default_model = "local-model"
+    requires_api_key = False
+
+
+class LmStudioProvider(OpenAICompatibleProvider):
+    provider_name = "lmstudio"
+    default_model = "local-model"
+    requires_api_key = False
+
+
+class TogetherProvider(OpenAICompatibleProvider):
+    provider_name = "together"
+    default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+
+
+class GroqProvider(OpenAICompatibleProvider):
+    provider_name = "groq"
+    default_model = "llama-3.1-8b-instant"
+
+
+class FireworksProvider(OpenAICompatibleProvider):
+    provider_name = "fireworks"
+    default_model = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+
+
+PROVIDER_REGISTRY = {
+    "local": LocalRuleProvider,
+    "openai": OpenAICompatibleProvider,
+    "openai_compatible": OpenAICompatibleProvider,
+    "anthropic": AnthropicProvider,
+    "huggingface": HuggingFaceProvider,
+    "ollama": OllamaProvider,
+    "vllm": VllmProvider,
+    "lmstudio": LmStudioProvider,
+    "together": TogetherProvider,
+    "groq": GroqProvider,
+    "fireworks": FireworksProvider,
+}
+
+
 def run_twitter_etl():
     rows = load_source_rows()
     normalized_rows = [_normalize_tweet(row) for row in rows]
@@ -291,15 +541,8 @@ def enrich_tweets(normalized_rows):
 
 
 def enrich_tweet(row):
-    ai_model = LOCAL_ENRICHER_MODEL
-    ai_enrichment = None
-    if os.getenv("OPENAI_API_KEY"):
-        ai_enrichment = _try_openai_enrichment(row)
-        if ai_enrichment:
-            ai_model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
-
-    if ai_enrichment is None:
-        ai_enrichment = _local_ai_enrichment(row["text"])
+    enrichment_result = _run_provider_enrichment(row)
+    ai_enrichment = enrichment_result["ai_enrichment"]
 
     domain_analysis = _domain_analysis(row["text"], ai_enrichment)
     record = {
@@ -308,7 +551,10 @@ def enrich_tweet(row):
         "domain_analysis": domain_analysis,
         "quality": {
             "schema_version": SCHEMA_VERSION,
-            "ai_model": ai_model,
+            "ai_provider": enrichment_result["ai_provider"],
+            "ai_model": enrichment_result["ai_model"],
+            "enrichment_mode": enrichment_result["enrichment_mode"],
+            "fallback_used": enrichment_result["fallback_used"],
             "validated": False,
             "validation_errors": [],
             "requires_human_review": _requires_human_review(row, ai_enrichment, domain_analysis),
@@ -391,6 +637,12 @@ def validate_enriched_record(record):
 
     if quality.get("schema_version") != SCHEMA_VERSION:
         errors.append("quality.schema_version is invalid")
+    if quality.get("ai_provider") and quality.get("ai_provider") not in SUPPORTED_AI_PROVIDERS:
+        errors.append("quality.ai_provider is invalid")
+    if quality.get("enrichment_mode") and quality.get("enrichment_mode") not in ENRICHMENT_MODES:
+        errors.append("quality.enrichment_mode is invalid")
+    if "fallback_used" in quality and not isinstance(quality.get("fallback_used"), bool):
+        errors.append("quality.fallback_used must be boolean")
     return errors
 
 
@@ -480,42 +732,128 @@ def _local_ai_enrichment(text):
     }
 
 
-def _try_openai_enrichment(row):
-    try:
-        from openai import OpenAI
-
-        client = OpenAI()
-        response = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
-            input=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Return only valid JSON for one tweet. Do not invent facts, "
-                        "source URLs, metrics, or market signals. Use 'none' when "
-                        "the tweet does not support a signal."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(_tweet_payload(row), ensure_ascii=False)},
-            ],
-            text={"format": {"type": "json_object"}},
-        )
-        content = getattr(response, "output_text", "")
-        parsed = json.loads(content)
-        if validate_enriched_record(
-            {
-                "tweet": _tweet_payload(row),
-                "ai_enrichment": parsed,
-                "domain_analysis": _domain_analysis(row["text"], parsed),
-                "quality": {
-                    "schema_version": SCHEMA_VERSION,
-                    "ai_model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
-                },
+def _run_provider_enrichment(row):
+    requested_mode = _enrichment_mode_from_env()
+    provider = _provider_from_env()
+    if requested_mode == "local":
+        provider = LocalRuleProvider()
+    provider_errors = []
+    if provider.is_configured():
+        try:
+            ai_enrichment = _provider_ai_enrichment(row, provider, requested_mode)
+            return {
+                "ai_enrichment": ai_enrichment,
+                "ai_provider": provider.provider_name,
+                "ai_model": provider.model,
+                "enrichment_mode": _quality_enrichment_mode(provider, requested_mode),
+                "fallback_used": False,
+                "provider_errors": [],
             }
-        ):
-            return None
-        return parsed
-    except Exception:
+        except Exception as exc:
+            provider_errors.append(str(exc))
+    elif provider.provider_name != LOCAL_PROVIDER:
+        provider_errors.append(f"{provider.provider_name} provider is not configured")
+
+    fallback = LocalRuleProvider()
+    return {
+        "ai_enrichment": fallback.enrich(row),
+        "ai_provider": fallback.provider_name,
+        "ai_model": fallback.model,
+        "enrichment_mode": "local",
+        "fallback_used": provider.provider_name != LOCAL_PROVIDER,
+        "provider_errors": provider_errors,
+    }
+
+
+def _provider_ai_enrichment(row, provider, requested_mode):
+    if provider.provider_name == LOCAL_PROVIDER:
+        return provider.enrich(row)
+    model_enrichment = _validate_ai_enrichment(provider.enrich(row))
+    if requested_mode != "hybrid":
+        return model_enrichment
+    local_enrichment = LocalRuleProvider().enrich(row)
+    merged = dict(local_enrichment)
+    merged.update(model_enrichment)
+    return _validate_ai_enrichment(merged)
+
+
+def _quality_enrichment_mode(provider, requested_mode):
+    if provider.provider_name == LOCAL_PROVIDER:
+        return "local"
+    if requested_mode == "hybrid":
+        return "hybrid"
+    return provider.enrichment_mode
+
+
+def _enrichment_mode_from_env():
+    mode = os.getenv("AI_ENRICHMENT_MODE", "auto").strip().lower()
+    if mode in ENRICHMENT_MODES:
+        return mode
+    return "auto"
+
+
+def _provider_from_env():
+    provider_name = os.getenv("AI_PROVIDER", LOCAL_PROVIDER).strip().lower() or LOCAL_PROVIDER
+    provider_name = _legacy_provider_name(provider_name)
+    provider_cls = PROVIDER_REGISTRY.get(provider_name)
+    if provider_cls is None:
+        provider_cls = LocalRuleProvider
+    provider = provider_cls(
+        model=_provider_model(provider_name, provider_cls),
+        api_key=_provider_api_key(provider_name),
+        base_url=_provider_base_url(provider_name),
+    )
+    if provider_name == "openai":
+        provider.provider_name = "openai"
+    return provider
+
+
+def _legacy_provider_name(provider_name):
+    aliases = {"local_llm": "ollama", "openai-compatible": "openai_compatible"}
+    return aliases.get(provider_name, provider_name)
+
+
+def _provider_model(provider_name, provider_cls):
+    legacy_model = os.getenv("OPENAI_MODEL") if provider_name == "openai" else None
+    return os.getenv("AI_MODEL") or legacy_model or provider_cls.default_model
+
+
+def _provider_api_key(provider_name):
+    provider_env = f"{provider_name.upper()}_API_KEY"
+    if provider_name == "openai":
+        return os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if provider_name == "anthropic":
+        return os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    return os.getenv("AI_API_KEY") or os.getenv(provider_env)
+
+
+def _provider_base_url(provider_name):
+    provider_env = f"{provider_name.upper()}_BASE_URL"
+    defaults = {
+        "ollama": "http://localhost:11434/v1",
+        "lmstudio": "http://localhost:1234/v1",
+        "vllm": "http://localhost:8000/v1",
+    }
+    return os.getenv("AI_BASE_URL") or os.getenv(provider_env) or defaults.get(provider_name)
+
+
+def _validate_ai_enrichment(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("AI provider returned a non-object payload")
+    model = AiEnrichmentModel.model_validate(payload)
+    return model.model_dump()
+
+
+def _try_openai_enrichment(row):
+    """Backward-compatible helper retained for older callers."""
+    try:
+        provider = OpenAICompatibleProvider(
+            model=os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL"),
+            api_key=os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("AI_BASE_URL"),
+        )
+        return _validate_ai_enrichment(provider.enrich(row))
+    except (Exception, ValidationError):
         return None
 
 
