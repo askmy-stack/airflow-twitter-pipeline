@@ -4,8 +4,8 @@ Streamlit analytics dashboard for the Twitter data pipeline.
 Usage:
     streamlit run dashboard.py
 
-Reads refined_tweets.csv (produced by the Airflow pipeline) via DuckDB and
-renders live charts.  Refreshes automatically every 5 minutes via st.cache_data.
+Reads enriched JSONL first, then falls back to refined_tweets.csv. Renders
+analytics charts and refreshes every 5 minutes via st.cache_data.
 """
 from __future__ import annotations
 
@@ -34,24 +34,55 @@ st.caption("Powered by Apache Airflow · Model-agnostic AI enrichment · DuckDB"
 # ---------------------------------------------------------------------------
 # Data loading (cached 5 min)
 # ---------------------------------------------------------------------------
-CSV_PATH = os.environ.get("TWEET_CSV_PATH", "refined_tweets.csv")
+JSONL_PATH = os.environ.get("TWEET_JSONL_PATH", os.environ.get("OUTPUT_JSONL_PATH", "outputs/enriched_tweets.jsonl"))
+CSV_PATH = os.environ.get("TWEET_CSV_PATH", os.environ.get("OUTPUT_CSV_PATH", "outputs/refined_tweets.csv"))
 
 
 @st.cache_data(ttl=300)
-def load_data(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
+def load_data(jsonl_path: str, csv_path: str) -> pd.DataFrame:
+    if os.path.exists(jsonl_path):
+        records = []
+        with open(jsonl_path, encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    records.append(_flatten_enriched_record(json.loads(line)))
+        return pd.DataFrame(records)
+    if not os.path.exists(csv_path):
         return pd.DataFrame()
     con = duckdb.connect()
-    df = con.execute(f"SELECT * FROM read_csv_auto('{path}')").df()
+    df = con.execute(f"SELECT * FROM read_csv_auto('{csv_path}')").df()
     df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
     return df
 
 
-df = load_data(CSV_PATH)
+def _flatten_enriched_record(record: dict) -> dict:
+    tweet = record["tweet"]
+    ai = record["ai_enrichment"]
+    domain = record["domain_analysis"]
+    quality = record["quality"]
+    signal = ai["market_or_social_signal"]
+    return {
+        "user": tweet["author_handle"],
+        "text": tweet["text"],
+        "favorite_count": tweet["metrics"]["likes"],
+        "retweet_count": tweet["metrics"]["retweets"],
+        "created_at": pd.to_datetime(tweet["created_at"], errors="coerce"),
+        "sentiment": ai["sentiment"],
+        "topics": ai["topics"],
+        "summary": ai["summary"],
+        "intent": ai["intent"],
+        "signal_type": signal["signal_type"],
+        "primary_domain": domain["primary_domain"],
+        "source_confidence": tweet["source_confidence"],
+        "requires_human_review": quality["requires_human_review"],
+    }
+
+
+df = load_data(JSONL_PATH, CSV_PATH)
 
 if df.empty:
     st.warning(
-        f"No data found at **{CSV_PATH}**.  "
+        f"No data found at **{JSONL_PATH}** or **{CSV_PATH}**.  "
         "Run the Airflow pipeline first, then refresh this page."
     )
     st.stop()
@@ -160,6 +191,19 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("Raw Tweet Explorer")
 
-display_cols = [c for c in ["user", "text", "favorite_count", "retweet_count",
-                             "sentiment", "summary", "created_at"] if c in df.columns]
+display_cols = [
+    c
+    for c in [
+        "user",
+        "text",
+        "favorite_count",
+        "retweet_count",
+        "sentiment",
+        "primary_domain",
+        "signal_type",
+        "summary",
+        "created_at",
+    ]
+    if c in df.columns
+]
 st.dataframe(df[display_cols].head(50), use_container_width=True)

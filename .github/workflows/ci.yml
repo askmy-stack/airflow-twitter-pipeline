@@ -30,7 +30,7 @@ jobs:
           pip install pytest
 
       - name: Compile modules
-        run: python -m py_compile twitter_etl.py twitter_dag.py
+        run: python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py
 
       - name: Run unit tests
         run: PYTHONPATH=. pytest tests/ -q
