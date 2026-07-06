@@ -29,7 +29,7 @@ st.set_page_config(
 )
 
 st.title("X / Twitter Data Pipeline — Live Analytics")
-st.caption("Powered by Apache Airflow · Claude LLM · Pandera · DuckDB")
+st.caption("Powered by Apache Airflow · Model-agnostic AI enrichment · DuckDB")
 
 # ---------------------------------------------------------------------------
 # Data loading (cached 5 min)
