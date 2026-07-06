@@ -1,11 +1,27 @@
 import json
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from social_signal_pipeline.exports import (
+    csv_projection as _csv_projection,
+    enriched_csv_projection as _enriched_csv_projection,
+    write_enriched_outputs as _write_enriched_outputs,
+)
+from social_signal_pipeline.sources import (
+    fetch_twitter_rows,
+    load_export_rows,
+    load_source_rows,
+    load_xquik_rows,
+    normalize_datetime as _normalize_datetime,
+    normalize_tweet as _normalize_tweet,
+    normalise_tweets as _normalise_tweets,
+    now_iso as _now_iso,
+    to_int as _to_int,
+)
 
 
 SCHEMA_VERSION = "1.0"
@@ -478,64 +494,6 @@ def run_twitter_etl():
     }
 
 
-def load_source_rows():
-    fixture_path = os.getenv("FIXTURE_TWEETS_PATH") or os.getenv("SAMPLE_TWEETS_PATH")
-    xquik_path = os.getenv("XQUIK_TWEETS_PATH")
-    if fixture_path:
-        return _tag_rows(load_export_rows(fixture_path, source_name="fixture"), "fixture", is_sample=True)
-    if xquik_path:
-        return _tag_rows(load_export_rows(xquik_path, source_name="Xquik"), "xquik", is_sample=False)
-    return _tag_rows(fetch_twitter_rows(), "twitter_api", is_sample=False)
-
-
-def fetch_twitter_rows():
-    import tweepy
-
-    consumer_key = _required_env("TWITTER_CONSUMER_KEY")
-    consumer_secret = _required_env("TWITTER_CONSUMER_SECRET")
-    access_token = _required_env("TWITTER_ACCESS_TOKEN")
-    access_secret = _required_env("TWITTER_ACCESS_SECRET")
-    screen_name = os.getenv("TWITTER_SCREEN_NAME", "@elonmusk")
-    count = int(os.getenv("TWITTER_MAX_COUNT", "200"))
-
-    auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
-    auth.set_access_token(access_token, access_secret)
-
-    api = tweepy.API(auth)
-    tweets = api.user_timeline(
-        screen_name=screen_name,
-        count=max(1, min(count, 200)),
-        include_rts=False,
-        tweet_mode="extended",
-    )
-    return [tweet._json for tweet in tweets]
-
-
-def load_export_rows(path, source_name="export"):
-    source = Path(path)
-    if not source.exists():
-        raise FileNotFoundError(f"{source_name} export not found: {source}")
-    if source.suffix.lower() == ".csv":
-        return pd.read_csv(source).to_dict(orient="records")
-    raw = source.read_text(encoding="utf-8").strip()
-    if not raw:
-        return []
-    if source.suffix.lower() == ".jsonl":
-        return [json.loads(line) for line in raw.splitlines() if line.strip()]
-    payload = json.loads(raw)
-    if isinstance(payload, dict):
-        for key in ("data", "tweets", "items", "results"):
-            if isinstance(payload.get(key), list):
-                return payload[key]
-    if isinstance(payload, list):
-        return payload
-    raise ValueError(f"{source_name} export must be a JSON array, JSONL file, or CSV file")
-
-
-def load_xquik_rows(path):
-    return load_export_rows(path, source_name="Xquik")
-
-
 def enrich_tweets(normalized_rows):
     return [enrich_tweet(row) for row in normalized_rows]
 
@@ -569,23 +527,7 @@ def enrich_tweet(row):
 
 
 def write_enriched_outputs(records, jsonl_path, json_path):
-    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    with jsonl_path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    grouped = {
-        "metadata": {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": _now_iso(),
-            "record_count": len(records),
-        },
-        "records": records,
-    }
-    json_path.write_text(
-        json.dumps(grouped, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    _write_enriched_outputs(records, jsonl_path, json_path, schema_version=SCHEMA_VERSION)
 
 
 def validate_enriched_record(record):
@@ -644,56 +586,6 @@ def validate_enriched_record(record):
     if "fallback_used" in quality and not isinstance(quality.get("fallback_used"), bool):
         errors.append("quality.fallback_used must be boolean")
     return errors
-
-
-def _normalize_tweet(tweet):
-    user = tweet.get("user") if isinstance(tweet.get("user"), dict) else {}
-    author = tweet.get("author") if isinstance(tweet.get("author"), dict) else {}
-    identity = user or author or tweet
-    connector = tweet.get("_source_connector", "xquik")
-    is_sample = bool(tweet.get("_is_sample") or tweet.get("is_sample"))
-    tweet_id = str(_first_value(tweet, "id", "tweet_id", "tweetId", "rest_id") or "")
-    author_handle = str(_first_value(identity, "screen_name", "screenName", "username", "handle") or "")
-    if author_handle.startswith("@"):
-        author_handle = author_handle[1:]
-    source_confidence = _source_confidence(connector, tweet_id, is_sample)
-    return {
-        "tweet_id": tweet_id,
-        "source_url": _source_url(tweet, tweet_id, author_handle),
-        "author_handle": author_handle or "unknown",
-        "author_name": _first_value(identity, "name", "display_name", "displayName") or None,
-        "text": _first_value(tweet, "full_text", "fullText", "text", "content") or "",
-        "created_at": _normalize_datetime(_first_value(tweet, "created_at", "createdAt", "createdAtIso")),
-        "ingested_at": _now_iso(),
-        "language": _first_value(tweet, "lang", "language") or None,
-        "metrics": {
-            "likes": _to_int(_first_value(tweet, "favorite_count", "like_count", "likes")),
-            "retweets": _to_int(_first_value(tweet, "retweet_count", "retweets")),
-            "replies": _to_int(_first_value(tweet, "reply_count", "replies")),
-            "quotes": _to_int(_first_value(tweet, "quote_count", "quotes")),
-        },
-        "source_connector": connector,
-        "source_confidence": source_confidence,
-        "is_sample": is_sample,
-    }
-
-
-def _normalise_tweets(tweets):
-    rows = []
-    for tweet in tweets:
-        normalized = _normalize_tweet(tweet)
-        if not normalized["text"]:
-            continue
-        rows.append(
-            {
-                "user": normalized["author_handle"],
-                "text": normalized["text"],
-                "favorite_count": normalized["metrics"]["likes"],
-                "retweet_count": normalized["metrics"]["retweets"],
-                "created_at": normalized["created_at"],
-            }
-        )
-    return rows
 
 
 def _tweet_payload(row):
@@ -1025,133 +917,6 @@ def _requires_human_review(row, ai_enrichment, domain_analysis):
     return domain_analysis.get("relevance_score", 0) < 0.2
 
 
-def _csv_projection(rows):
-    projected = []
-    for row in rows:
-        projected.append(
-            {
-                "tweet_id": row["tweet_id"],
-                "user": row["author_handle"],
-                "text": row["text"],
-                "favorite_count": row["metrics"]["likes"],
-                "retweet_count": row["metrics"]["retweets"],
-                "created_at": row["created_at"],
-                "source_connector": row["source_connector"],
-                "source_confidence": row["source_confidence"],
-                "is_sample": row["is_sample"],
-            }
-        )
-    return projected
-
-
-def _enriched_csv_projection(records):
-    projected = []
-    for record in records:
-        tweet = record["tweet"]
-        ai = record["ai_enrichment"]
-        domain = record["domain_analysis"]
-        quality = record["quality"]
-        signal = ai["market_or_social_signal"]
-        toxicity = ai["toxicity_risk"]
-        projected.append(
-            {
-                "tweet_id": tweet["tweet_id"],
-                "user": tweet["author_handle"],
-                "text": tweet["text"],
-                "favorite_count": tweet["metrics"]["likes"],
-                "retweet_count": tweet["metrics"]["retweets"],
-                "reply_count": tweet["metrics"]["replies"],
-                "quote_count": tweet["metrics"]["quotes"],
-                "created_at": tweet["created_at"],
-                "source_connector": tweet["source_connector"],
-                "source_confidence": tweet["source_confidence"],
-                "is_sample": tweet["is_sample"],
-                "sentiment": ai["sentiment"],
-                "topics": json.dumps(ai["topics"], ensure_ascii=False),
-                "summary": ai["summary"],
-                "intent": ai["intent"],
-                "toxicity_level": toxicity["level"],
-                "toxicity_score": toxicity["score"],
-                "signal_type": signal["signal_type"],
-                "signal_strength": signal["strength"],
-                "primary_domain": domain["primary_domain"],
-                "secondary_domains": json.dumps(domain["secondary_domains"], ensure_ascii=False),
-                "relevance_score": domain["relevance_score"],
-                "ai_provider": quality["ai_provider"],
-                "ai_model": quality["ai_model"],
-                "enrichment_mode": quality["enrichment_mode"],
-                "fallback_used": quality["fallback_used"],
-                "requires_human_review": quality["requires_human_review"],
-                "validated": quality["validated"],
-            }
-        )
-    return projected
-
-
-def _tag_rows(rows, connector, is_sample):
-    tagged = []
-    for row in rows:
-        copied = dict(row)
-        copied["_source_connector"] = connector
-        copied["_is_sample"] = is_sample
-        tagged.append(copied)
-    return tagged
-
-
-def _source_confidence(connector, tweet_id, is_sample):
-    if is_sample or connector == "fixture":
-        return "sample"
-    if connector == "twitter_api" and tweet_id:
-        return "verified"
-    return "exported"
-
-
-def _source_url(tweet, tweet_id, author_handle):
-    explicit = _first_value(tweet, "source_url", "url", "tweet_url", "tweetUrl")
-    if explicit:
-        return explicit
-    if tweet_id and author_handle:
-        return f"https://twitter.com/{author_handle}/status/{tweet_id}"
-    return None
-
-
-def _first_value(data, *keys):
-    for key in keys:
-        value = data.get(key)
-        if value not in (None, ""):
-            return value
-    return ""
-
-
-def _normalize_datetime(value):
-    if not value:
-        return _now_iso()
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        text = str(value).strip()
-        try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return text
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _now_iso():
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _to_int(value):
-    if value in (None, ""):
-        return 0
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _require(data, key, errors):
     if data.get(key) in (None, ""):
         errors.append(f"{key} is required")
@@ -1160,10 +925,3 @@ def _require(data, key, errors):
 def _validate_score(value, path, errors):
     if not isinstance(value, (int, float)) or value < 0 or value > 1:
         errors.append(f"{path} must be between 0 and 1")
-
-
-def _required_env(name):
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"{name} is required when no fixture or Xquik path is set")
-    return value

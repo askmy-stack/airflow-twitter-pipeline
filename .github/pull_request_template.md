@@ -13,8 +13,8 @@ Explain what changed and why.
 
 ## Validation
 
-- [ ] `python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py`
-- [ ] `PYTHONPATH=. pytest tests/ -q`
+- [ ] `python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py social_signal_pipeline/*.py`
+- [ ] `pytest -q`
 - [ ] Fixture demo writes CSV, JSONL, and grouped JSON outputs
 
 ## Data safety

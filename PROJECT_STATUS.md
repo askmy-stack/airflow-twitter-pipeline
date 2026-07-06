@@ -12,11 +12,13 @@ The main pipeline currently supports:
 - deterministic local enrichment with no paid API keys
 - model-agnostic AI provider selection through environment variables
 - strict schema validation for AI enrichment output
+- retry/backoff and logging for live Twitter/X ingestion
 - JSONL and grouped JSON export artifacts
 - analytics-ready CSV export generated from enriched records
-- Airflow orchestration
+- Airflow 2 TaskFlow orchestration
 - Streamlit dashboard support with JSONL-first loading
 - GitHub Actions CI
+- tag-driven GitHub Release workflow
 - production-readiness audit in `docs/PRODUCTION_READINESS_AUDIT.md`
 
 ## Model-Agnostic AI Enrichment
@@ -58,8 +60,8 @@ All model responses are treated as untrusted until they pass schema validation. 
 Run these before pushing changes:
 
 ```bash
-python3 -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py
-PYTHONPATH=. pytest tests/ -q
+python3 -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py social_signal_pipeline/*.py
+pytest -q
 FIXTURE_TWEETS_PATH=examples/sample_tweets.jsonl \
 OUTPUT_CSV_PATH=outputs/refined_tweets.csv \
 OUTPUT_JSONL_PATH=outputs/enriched_tweets.jsonl \
@@ -69,8 +71,7 @@ python3 -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
 
 ## Next Recommended Enhancements
 
-- Split `twitter_etl.py` into focused ingestion, enrichment, schema, and export modules.
-- Modernize the Airflow DAG to Airflow 2 style imports.
+- Continue splitting provider and schema internals into focused modules.
 - Add contributor issues for new connectors and provider adapters.
 - Add optional semantic search with embeddings and a local vector index.
-- Add retry/backoff and structured logging for live API ingestion.
+- Add dashboard tests and screenshot/GIF assets.

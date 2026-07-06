@@ -13,7 +13,9 @@ The local deterministic provider must always work without credentials.
 | Path | Purpose |
 |---|---|
 | `twitter_etl.py` | Source loading, normalization, provider selection, enrichment, validation, and export writing |
-| `twitter_dag.py` | Airflow DAG entrypoint calling `run_twitter_etl()` |
+| `social_signal_pipeline/sources.py` | Source loading, Twitter/X retry handling, normalization, and provenance helpers |
+| `social_signal_pipeline/exports.py` | JSON/JSONL writing and CSV projection helpers |
+| `twitter_dag.py` | Airflow 2 TaskFlow DAG entrypoint calling `run_twitter_etl()` |
 | `dashboard.py` | Streamlit dashboard; reads JSONL first, CSV fallback second |
 | `streaming/twitter_stream.py` | Optional Twitter/X filtered-stream to Kafka producer |
 | `examples/sample_tweets.jsonl` | Safe fixture data for demos and tests |
@@ -54,8 +56,8 @@ All provider output must pass `AiEnrichmentModel` validation before use. Invalid
 ## Validation Commands
 
 ```bash
-python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py
-PYTHONPATH=. pytest tests/ -q
+python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py social_signal_pipeline/*.py
+pytest -q
 FIXTURE_TWEETS_PATH=examples/sample_tweets.jsonl \
 OUTPUT_CSV_PATH=outputs/refined_tweets.csv \
 OUTPUT_JSONL_PATH=outputs/enriched_tweets.jsonl \
@@ -65,7 +67,6 @@ python -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
 
 ## Current Technical Debt
 
-- `twitter_etl.py` should eventually be split into source, schema, provider, enrichment, and export modules.
-- `twitter_dag.py` should move to an Airflow 2 TaskFlow DAG with separate tasks.
-- Live Twitter/X API calls need stronger retry, rate-limit, and structured logging behavior.
+- Provider and schema internals should eventually be split out of `twitter_etl.py`.
+- A future Airflow DAG variant can use separate extract, enrich, validate, and export tasks.
 - Dashboard tests should be added once the UI is promoted beyond demo/portfolio use.
