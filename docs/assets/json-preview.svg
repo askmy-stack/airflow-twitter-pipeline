@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="420" viewBox="0 0 980 420" role="img" aria-labelledby="title desc">
+  <title id="title">Structured enrichment JSON preview</title>
+  <desc id="desc">A preview of a structured tweet enrichment record with tweet, ai_enrichment, domain_analysis, and quality sections.</desc>
+  <rect width="980" height="420" rx="18" fill="#0f1720"/>
+  <rect x="28" y="28" width="924" height="364" rx="14" fill="#14212b" stroke="#2f4552"/>
+  <circle cx="58" cy="58" r="7" fill="#ff6b6b"/>
+  <circle cx="82" cy="58" r="7" fill="#ffd166"/>
+  <circle cx="106" cy="58" r="7" fill="#06d6a0"/>
+  <text x="42" y="105" fill="#8bd3ff" font-family="Menlo, Consolas, monospace" font-size="17">{</text>
+  <text x="70" y="138" fill="#d7e4ef" font-family="Menlo, Consolas, monospace" font-size="17">"tweet": {"source_confidence": "verified", "is_sample": false},</text>
+  <text x="70" y="176" fill="#d7e4ef" font-family="Menlo, Consolas, monospace" font-size="17">"ai_enrichment": {"sentiment": "positive", "intent": "research_update"},</text>
+  <text x="70" y="214" fill="#d7e4ef" font-family="Menlo, Consolas, monospace" font-size="17">"market_or_social_signal": {"signal_type": "adoption", "strength": "medium"},</text>
+  <text x="70" y="252" fill="#d7e4ef" font-family="Menlo, Consolas, monospace" font-size="17">"domain_analysis": {"primary_domain": "ai_ml", "relevance_score": 0.82},</text>
+  <text x="70" y="290" fill="#d7e4ef" font-family="Menlo, Consolas, monospace" font-size="17">"quality": {"ai_provider": "local", "validated": true, "fallback_used": false}</text>
+  <text x="42" y="328" fill="#8bd3ff" font-family="Menlo, Consolas, monospace" font-size="17">}</text>
+  <rect x="662" y="333" width="244" height="34" rx="17" fill="#143d31" stroke="#20c997"/>
+  <text x="685" y="356" fill="#b5ffe4" font-family="Inter, Arial, sans-serif" font-size="14">Schema-validated output</text>
+</svg>

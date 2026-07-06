@@ -460,12 +460,12 @@ def run_twitter_etl():
     rows = load_source_rows()
     normalized_rows = [_normalize_tweet(row) for row in rows]
     normalized_rows = [row for row in normalized_rows if row["text"]]
+    enriched = enrich_tweets(normalized_rows)
 
     output_path = Path(os.getenv("OUTPUT_CSV_PATH", "refined_tweets.csv"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(_csv_projection(normalized_rows)).to_csv(output_path, index=False)
+    pd.DataFrame(_enriched_csv_projection(enriched)).to_csv(output_path, index=False)
 
-    enriched = enrich_tweets(normalized_rows)
     jsonl_path = Path(os.getenv("OUTPUT_JSONL_PATH", "outputs/enriched_tweets.jsonl"))
     json_path = Path(os.getenv("OUTPUT_JSON_PATH", "outputs/enriched_tweets.json"))
     write_enriched_outputs(enriched, jsonl_path=jsonl_path, json_path=json_path)
@@ -1039,6 +1039,50 @@ def _csv_projection(rows):
                 "source_connector": row["source_connector"],
                 "source_confidence": row["source_confidence"],
                 "is_sample": row["is_sample"],
+            }
+        )
+    return projected
+
+
+def _enriched_csv_projection(records):
+    projected = []
+    for record in records:
+        tweet = record["tweet"]
+        ai = record["ai_enrichment"]
+        domain = record["domain_analysis"]
+        quality = record["quality"]
+        signal = ai["market_or_social_signal"]
+        toxicity = ai["toxicity_risk"]
+        projected.append(
+            {
+                "tweet_id": tweet["tweet_id"],
+                "user": tweet["author_handle"],
+                "text": tweet["text"],
+                "favorite_count": tweet["metrics"]["likes"],
+                "retweet_count": tweet["metrics"]["retweets"],
+                "reply_count": tweet["metrics"]["replies"],
+                "quote_count": tweet["metrics"]["quotes"],
+                "created_at": tweet["created_at"],
+                "source_connector": tweet["source_connector"],
+                "source_confidence": tweet["source_confidence"],
+                "is_sample": tweet["is_sample"],
+                "sentiment": ai["sentiment"],
+                "topics": json.dumps(ai["topics"], ensure_ascii=False),
+                "summary": ai["summary"],
+                "intent": ai["intent"],
+                "toxicity_level": toxicity["level"],
+                "toxicity_score": toxicity["score"],
+                "signal_type": signal["signal_type"],
+                "signal_strength": signal["strength"],
+                "primary_domain": domain["primary_domain"],
+                "secondary_domains": json.dumps(domain["secondary_domains"], ensure_ascii=False),
+                "relevance_score": domain["relevance_score"],
+                "ai_provider": quality["ai_provider"],
+                "ai_model": quality["ai_model"],
+                "enrichment_mode": quality["enrichment_mode"],
+                "fallback_used": quality["fallback_used"],
+                "requires_human_review": quality["requires_human_review"],
+                "validated": quality["validated"],
             }
         )
     return projected
