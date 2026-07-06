@@ -1,8 +1,11 @@
 import json
+import sys
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+import social_signal_pipeline.sources as sources
 from twitter_etl import (
     BaseEnrichmentProvider,
     _normalize_tweet,
@@ -320,6 +323,45 @@ def test_ollama_provider_uses_local_llm_mode_without_api_key(monkeypatch):
     assert provider.model == "llama3.1"
     assert provider.enrichment_mode == "local_llm"
     assert provider.is_configured() is True
+
+
+def test_twitter_fetch_retries_transient_api_failure(monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAuth:
+        def __init__(self, consumer_key, consumer_secret):
+            self.consumer_key = consumer_key
+            self.consumer_secret = consumer_secret
+
+        def set_access_token(self, access_token, access_secret):
+            self.access_token = access_token
+            self.access_secret = access_secret
+
+    class FakeApi:
+        def __init__(self, auth, wait_on_rate_limit):
+            self.auth = auth
+            self.wait_on_rate_limit = wait_on_rate_limit
+
+        def user_timeline(self, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("temporary API failure")
+            return [SimpleNamespace(_json={"id": "retry-1", "text": "Recovered after retry."})]
+
+    fake_tweepy = SimpleNamespace(OAuthHandler=FakeAuth, API=FakeApi)
+    monkeypatch.setitem(sys.modules, "tweepy", fake_tweepy)
+    monkeypatch.setattr(sources.time, "sleep", lambda delay: None)
+    monkeypatch.setenv("TWITTER_CONSUMER_KEY", "consumer")
+    monkeypatch.setenv("TWITTER_CONSUMER_SECRET", "secret")
+    monkeypatch.setenv("TWITTER_ACCESS_TOKEN", "access")
+    monkeypatch.setenv("TWITTER_ACCESS_SECRET", "access-secret")
+    monkeypatch.setenv("TWITTER_API_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("TWITTER_API_RETRY_SECONDS", "0")
+
+    rows = sources.fetch_twitter_rows()
+
+    assert calls["count"] == 2
+    assert rows == [{"id": "retry-1", "text": "Recovered after retry."}]
 
 
 def test_missing_xquik_tweet_id_is_exported_not_verified():

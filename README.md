@@ -94,8 +94,8 @@ python -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
 Validate the repository:
 
 ```bash
-python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py
-PYTHONPATH=. pytest tests/ -q
+python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py social_signal_pipeline/*.py
+pytest -q
 ```
 
 ## Source Configuration
@@ -158,6 +158,8 @@ Supported providers: `local`, `openai`, `anthropic`, `ollama`, `huggingface`, `v
 
 Supported enrichment modes: `local`, `api`, `local_llm`, and `hybrid`.
 
+See [docs/PROVIDERS.md](docs/PROVIDERS.md) for provider-specific setup examples.
+
 ## Output Schema
 
 The canonical record contains four top-level sections:
@@ -216,7 +218,7 @@ The dashboard prefers `outputs/enriched_tweets.jsonl` and falls back to `outputs
 
 ## Airflow
 
-Install Airflow separately when you want orchestration:
+The repository includes an Airflow 2 TaskFlow DAG in `twitter_dag.py`. Install Airflow separately when you want orchestration:
 
 ```bash
 pip install apache-airflow
@@ -226,6 +228,19 @@ airflow standalone
 ```
 
 Then place or mount the repository as an Airflow DAG folder and trigger `twitter_dag`.
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for local, Docker, Airflow, managed Airflow, and release guidance.
+
+## Release Strategy
+
+Releases are tag-driven. Update `VERSION` and `CHANGELOG.md`, then push a matching tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow validates that the tag matches `VERSION` before publishing a GitHub Release.
 
 ## Docker
 
@@ -245,14 +260,16 @@ Services:
 ```text
 .
 ├── .github/                  # CI, issue templates, PR template
-├── docs/assets/              # README visuals
+├── docs/                     # Provider, deployment, audit docs, and README visuals
 ├── examples/                 # Safe sample tweet fixtures
+├── social_signal_pipeline/   # Source, export, and package entrypoint modules
 ├── streaming/                # Optional Twitter/X filtered-stream producer
 ├── tests/                    # Unit and regression tests
 ├── dashboard.py              # Streamlit analytics dashboard
 ├── docker-compose.yml        # Local Airflow + Kafka + dashboard stack
 ├── twitter_dag.py            # Airflow DAG entrypoint
 ├── twitter_etl.py            # Ingestion, normalization, enrichment, validation, exports
+├── VERSION
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── CODE_OF_CONDUCT.md
@@ -261,8 +278,8 @@ Services:
 
 ## Roadmap
 
-- Split `twitter_etl.py` into focused ingestion, provider, schema, and export modules.
-- Add an Airflow 2 TaskFlow DAG with explicit extract, enrich, validate, and export tasks.
+- Continue splitting enrichment/provider internals into focused modules.
+- Add an Airflow DAG variant with explicit extract, enrich, validate, and export tasks.
 - Add semantic search with embeddings and a local vector index.
 - Add connector adapters for additional social and news sources.
 - Add a persisted DuckDB analytics layer.
@@ -282,7 +299,7 @@ Current strengths:
 Known next hardening steps:
 
 - split the main ETL module for long-term maintainability
-- add structured logging and retry policy around live API calls
+- extend structured logging and retry policy around provider calls
 - add rate-limit/backoff tests for Twitter/X ingestion
 - add deployment-specific secret management documentation
 - add release tags once the public API stabilizes

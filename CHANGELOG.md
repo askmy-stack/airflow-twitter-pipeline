@@ -16,6 +16,11 @@ This project follows a lightweight version of Keep a Changelog. Versioned releas
 - Flattened analytics CSV fields for dashboarding.
 - Professional README with visuals, architecture, schema, usage, roadmap, and production-readiness notes.
 - Repository visual assets in `docs/assets/`.
+- Package modules for source ingestion and export projection/writing.
+- Twitter/X API retry/backoff with logging.
+- Airflow 2 TaskFlow DAG.
+- Tag-driven GitHub Release workflow.
+- Provider and deployment guides.
 
 ### Changed
 
@@ -23,6 +28,7 @@ This project follows a lightweight version of Keep a Changelog. Versioned releas
 - Dashboard now prefers canonical JSONL output and falls back to CSV.
 - CI compiles ETL, Airflow DAG, dashboard, and streaming modules.
 - Project documentation now reflects the renamed `social-signal-pipeline` repository.
+- `twitter_commands.sh` is now an executable validation/demo helper.
 
 ### Security
 

@@ -13,6 +13,6 @@ export OUTPUT_CSV_PATH=outputs/refined_tweets.csv
 export OUTPUT_JSONL_PATH=outputs/enriched_tweets.jsonl
 export OUTPUT_JSON_PATH=outputs/enriched_tweets.json
 
-python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py
-PYTHONPATH=. pytest tests/ -q
+python -m py_compile twitter_etl.py twitter_dag.py dashboard.py streaming/twitter_stream.py social_signal_pipeline/*.py
+pytest -q
 python -c "from twitter_etl import run_twitter_etl; print(run_twitter_etl())"
